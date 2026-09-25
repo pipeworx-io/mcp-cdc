@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-cdc",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "CDC MCP — wraps CDC open data via Socrata API (data.cdc.gov)",
   "type": "module",
   "main": "src/index.ts",
@@ -26,7 +26,7 @@
     "@cloudflare/workers-types": "^4.20260405.1"
   },
   "pipeworx": {
-    "sourceHash": "v1-ca7da771007dbbd2529dd4257c49c6865be6d476272d3bbd2f5a0a941e8e9b2d",
-    "sourceCommit": "b474dbe9602a74ae8fa8e22a4316c9c15780f1d0"
+    "sourceHash": "v1-6d4c2b930c0c8eb44cb04e9c8f732bc9a47a4d3d1d18a0a0371c908303fa0143",
+    "sourceCommit": "babdd280d475dceddecc9ebf8f2a661712781a81"
   }
 }

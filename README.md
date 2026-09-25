@@ -2,7 +2,7 @@
 
 The CDC's data products: disease surveillance (notifiable conditions, FluView), vital statistics (births, deaths), behavioral risk factors (BRFSS), environmental health, social determinants of health. The authoritative US public-health data. Free, no auth (some datasets require a free token for higher volume).
 
-Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1681+ live data sources.
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1683+ live data sources.
 
 ## Why this matters for AI agents
 
@@ -105,7 +105,7 @@ directly, instead of just this one's:
 }
 ```
 
-Both URLs reach the same gateway and the same 1681+ data sources. The
+Both URLs reach the same gateway and the same 1683+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
 
