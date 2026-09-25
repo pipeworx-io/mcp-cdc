@@ -644,6 +644,22 @@ function collapse(s: string): string {
  * Tools:
  * - search_datasets: search CDC datasets by keyword
  * - get_dataset: get rows from a specific CDC dataset by ID
+ * - wastewater_national_trend: NWSS wastewater viral activity level, national (fleet #2417)
+ * - wastewater_state_trend: NWSS wastewater viral activity level, one state/territory (fleet #2417)
+ *
+ * NWSS notes (fleet #2417): the generic `search_datasets`/`get_dataset` pair cannot
+ * surface wastewater data reliably — Socrata full-text search for "wastewater" or
+ * "nwss" returns pollen/filovirus datasets, not the NWSS ones, and the two "NWSS
+ * Public..." dataset ids CDC used to publish (g653-rqe2, 2ew6-ywp6) stopped updating
+ * in Aug 2026. CDC replaced them with per-pathogen "CDC Wastewater Data for ..."
+ * site-level datasets (raw qPCR results, j9g8-acpt / ymmh-divb / 45cq-cw4i) and one
+ * combined, already-classified dataset, atcp-73re ("CDC Wastewater Viral Activity
+ * Level for SARS-CoV-2, Influenza A and RSV") — weekly, one row per site per
+ * pathogen, each row carrying a site_wval score and a 5-level category (Very Low /
+ * Low / Moderate / High / Very High). That dataset has no single "national" row, so
+ * these two tools aggregate it: population-weighted mean of the category rank
+ * (1=Very Low .. 5=Very High) across every reporting site, rounded back to a label,
+ * for the national and per-state/territory grain, plus a week-over-week trend.
  */
 
 
@@ -711,6 +727,49 @@ const tools: McpToolExport['tools'] = [
       required: ['id'],
     },
   },
+  {
+    name: 'wastewater_national_trend',
+    description:
+      'National CDC NWSS wastewater viral activity level (WVAL) for SARS-CoV-2, influenza A, or RSV — the leading public signal for near-term respiratory infection and test-demand trends, published weekly (Fridays) from ~800+ US sewershed sites. Returns the latest week\'s national level (Very Low/Low/Moderate/High/Very High, population-weighted across reporting sites), the category breakdown, and a week-over-week trend. Example: wastewater_national_trend({"pathogen":"SARS-CoV-2"}).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pathogen: {
+          type: 'string',
+          description:
+            'Pathogen: "SARS-CoV-2" (aliases: covid, covid-19), "Influenza A" (aliases: flu, influenza), or "RSV". Default SARS-CoV-2.',
+        },
+        weeks: {
+          type: 'number',
+          description: 'Trailing weeks of history to include (default 4, max 12).',
+        },
+      },
+    },
+  },
+  {
+    name: 'wastewater_state_trend',
+    description:
+      'CDC NWSS wastewater viral activity level (WVAL) for one US state or territory — same population-weighted national methodology as wastewater_national_trend, scoped to reporting sites within the state. Example: wastewater_state_trend({"state":"California","pathogen":"SARS-CoV-2"}).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        state: {
+          type: 'string',
+          description: 'US state, DC, or territory name or postal abbreviation (e.g. "California" or "CA").',
+        },
+        pathogen: {
+          type: 'string',
+          description:
+            'Pathogen: "SARS-CoV-2" (aliases: covid, covid-19), "Influenza A" (aliases: flu, influenza), or "RSV". Default SARS-CoV-2.',
+        },
+        weeks: {
+          type: 'number',
+          description: 'Trailing weeks of history to include (default 4, max 12).',
+        },
+      },
+      required: ['state'],
+    },
+  },
 ];
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -719,6 +778,18 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return searchDatasets(args.query as string);
     case 'get_dataset':
       return getDataset(args.id as string, (args.limit as number) ?? 50);
+    case 'wastewater_national_trend':
+      return wastewaterTrend({
+        pathogenInput: args.pathogen as string | undefined,
+        weeks: args.weeks as number | undefined,
+      });
+    case 'wastewater_state_trend':
+      if (!args.state) throw new Error('state is required, e.g. "California" or "CA"');
+      return wastewaterTrend({
+        pathogenInput: args.pathogen as string | undefined,
+        weeks: args.weeks as number | undefined,
+        stateInput: args.state as string,
+      });
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -767,6 +838,196 @@ async function getDataset(id: string, limit: number) {
     row_count: data.length,
     columns,
     rows: data,
+  };
+}
+
+// --- NWSS wastewater viral activity level (fleet #2417) -------------------
+
+const NWSS_WVAL_DATASET = 'atcp-73re'; // "CDC Wastewater Viral Activity Level for SARS-CoV-2, Influenza A and RSV"
+
+// Exact pathogen_target values the dataset uses.
+const PATHOGEN_VALUES = ['SARS-CoV-2', 'Influenza A virus', 'RSV'] as const;
+
+function normalizePathogen(input: string | undefined): (typeof PATHOGEN_VALUES)[number] {
+  const key = (input ?? 'sars-cov-2').trim().toLowerCase();
+  if (key.includes('flu') || key.includes('influenza')) return 'Influenza A virus';
+  if (key.includes('rsv') || key.includes('respiratory syncytial')) return 'RSV';
+  return 'SARS-CoV-2';
+}
+
+const STATE_ABBR: Record<string, string> = {
+  al: 'Alabama', ak: 'Alaska', az: 'Arizona', ar: 'Arkansas', ca: 'California',
+  co: 'Colorado', ct: 'Connecticut', de: 'Delaware', dc: 'District of Columbia',
+  fl: 'Florida', ga: 'Georgia', gu: 'Guam', hi: 'Hawaii', id: 'Idaho', il: 'Illinois',
+  in: 'Indiana', ia: 'Iowa', ks: 'Kansas', ky: 'Kentucky', la: 'Louisiana', me: 'Maine',
+  md: 'Maryland', ma: 'Massachusetts', mi: 'Michigan', mn: 'Minnesota', ms: 'Mississippi',
+  mo: 'Missouri', mt: 'Montana', ne: 'Nebraska', nv: 'Nevada', nh: 'New Hampshire',
+  nj: 'New Jersey', nm: 'New Mexico', ny: 'New York', nc: 'North Carolina',
+  nd: 'North Dakota', oh: 'Ohio', ok: 'Oklahoma', or: 'Oregon', pa: 'Pennsylvania',
+  pr: 'Puerto Rico', ri: 'Rhode Island', sc: 'South Carolina', sd: 'South Dakota',
+  tn: 'Tennessee', tx: 'Texas', ut: 'Utah', vt: 'Vermont', vi: 'U.S. Virgin Islands',
+  va: 'Virginia', wa: 'Washington', wv: 'West Virginia', wi: 'Wisconsin', wy: 'Wyoming',
+};
+
+function normalizeState(input: string): string {
+  const key = input.trim().toLowerCase();
+  return STATE_ABBR[key] ?? input.trim();
+}
+
+// SoQL string-literal escaping (single quotes only — the field is free text).
+function soqlLiteral(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
+const CATEGORY_RANK: Record<string, number> = {
+  'Very Low': 1,
+  Low: 2,
+  Moderate: 3,
+  High: 4,
+  'Very High': 5,
+};
+const RANK_LABEL = ['', 'Very Low', 'Low', 'Moderate', 'High', 'Very High'];
+
+function labelForRank(rank: number): string {
+  const rounded = Math.min(5, Math.max(1, Math.round(rank)));
+  return RANK_LABEL[rounded]!;
+}
+
+interface WeekAgg {
+  week_end: string;
+  categories: Record<string, { sites: number; population: number }>;
+}
+
+function addRow(
+  weeks: Map<string, WeekAgg>,
+  week_end: string,
+  category: string,
+  sites: number,
+  population: number,
+) {
+  let wk = weeks.get(week_end);
+  if (!wk) {
+    wk = { week_end, categories: {} };
+    weeks.set(week_end, wk);
+  }
+  const cat = wk.categories[category] ?? { sites: 0, population: 0 };
+  cat.sites += sites;
+  cat.population += population;
+  wk.categories[category] = cat;
+}
+
+function summarizeWeek(wk: WeekAgg) {
+  let totalSites = 0;
+  let totalPop = 0;
+  let weightedRankSum = 0; // population-weighted
+  const breakdown: Array<{ category: string; sites: number; population_served: number; percent_of_population: number }> = [];
+  for (const [category, { sites, population }] of Object.entries(wk.categories)) {
+    totalSites += sites;
+    totalPop += population;
+    weightedRankSum += (CATEGORY_RANK[category] ?? 3) * population;
+  }
+  for (const [category, { sites, population }] of Object.entries(wk.categories)) {
+    breakdown.push({
+      category,
+      sites,
+      population_served: population,
+      percent_of_population: totalPop > 0 ? Math.round((population / totalPop) * 1000) / 10 : 0,
+    });
+  }
+  breakdown.sort((a, b) => (CATEGORY_RANK[a.category] ?? 0) - (CATEGORY_RANK[b.category] ?? 0));
+  const weightedAvgRank = totalPop > 0 ? weightedRankSum / totalPop : null;
+  return {
+    week_end: wk.week_end,
+    national_level: weightedAvgRank !== null ? labelForRank(weightedAvgRank) : null,
+    weighted_avg_score: weightedAvgRank !== null ? Math.round(weightedAvgRank * 100) / 100 : null,
+    sites_reporting: totalSites,
+    population_covered: totalPop,
+    category_breakdown: breakdown,
+  };
+}
+
+async function wastewaterTrend(opts: { pathogenInput?: string; weeks?: number; stateInput?: string }) {
+  const pathogen = normalizePathogen(opts.pathogenInput);
+  const weeksBack = Math.min(12, Math.max(1, opts.weeks ?? 4));
+  const state = opts.stateInput ? normalizeState(opts.stateInput) : undefined;
+
+  // 1. Find the latest week_end for this pathogen (and state, if scoped) so a
+  //    state with a short reporting history doesn't get an empty window.
+  const whereParts = [`pathogen_target='${soqlLiteral(pathogen)}'`];
+  if (state) whereParts.push(`upper(state_territory)=upper('${soqlLiteral(state)}')`);
+  const baseWhere = whereParts.join(' AND ');
+
+  const latestRows = (await socrataGet(`${BASE_URL}/resource/${NWSS_WVAL_DATASET}.json`, {
+    $select: 'max(week_end) as latest',
+    $where: baseWhere,
+  })) as Array<{ latest: string | null }>;
+  const latestWeek = latestRows[0]?.latest ?? null;
+
+  if (!latestWeek) {
+    return {
+      pathogen,
+      state: state ?? null,
+      data_as_of: null,
+      national_level: null,
+      note: state
+        ? `No NWSS reporting sites found for "${opts.stateInput}" (normalized to "${state}") and pathogen ${pathogen}.`
+        : `No current NWSS data for pathogen ${pathogen}.`,
+    };
+  }
+
+  // 2. Pull the trailing `weeksBack` weeks of (week_end, category, count, sum(pop))
+  //    in one grouped query and aggregate client-side.
+  const cutoff = new Date(`${latestWeek}T00:00:00Z`);
+  cutoff.setUTCDate(cutoff.getUTCDate() - weeksBack * 7);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const historyWhere = `${baseWhere} AND week_end >= '${cutoffStr}'`;
+  const historyRows = (await socrataGet(`${BASE_URL}/resource/${NWSS_WVAL_DATASET}.json`, {
+    $select: 'week_end,site_wval_category,count(*) as n,sum(population_served) as pop',
+    $where: historyWhere,
+    $group: 'week_end,site_wval_category',
+    $order: 'week_end',
+    $limit: '500',
+  })) as Array<{ week_end: string; site_wval_category: string; n: string; pop: string | null }>;
+
+  const weeks = new Map<string, WeekAgg>();
+  for (const row of historyRows) {
+    addRow(weeks, row.week_end, row.site_wval_category, Number(row.n) || 0, Number(row.pop) || 0);
+  }
+
+  const orderedWeeks = [...weeks.values()].sort((a, b) => a.week_end.localeCompare(b.week_end));
+  const summaries = orderedWeeks.map(summarizeWeek);
+  const latest = summaries[summaries.length - 1] ?? null;
+  const previous = summaries.length > 1 ? summaries[summaries.length - 2] : null;
+
+  let trend: { direction: string; delta_score: number | null; previous_week_end: string | null } | null = null;
+  if (latest?.weighted_avg_score != null && previous?.weighted_avg_score != null) {
+    const delta = Math.round((latest.weighted_avg_score - previous.weighted_avg_score) * 100) / 100;
+    trend = {
+      direction: delta > 0.15 ? 'rising' : delta < -0.15 ? 'declining' : 'stable',
+      delta_score: delta,
+      previous_week_end: previous.week_end,
+    };
+  }
+
+  return {
+    pathogen,
+    state: state ?? null,
+    data_as_of: latestWeek,
+    national_level: latest?.national_level ?? null,
+    weighted_avg_score: latest?.weighted_avg_score ?? null,
+    scale: 'weighted_avg_score is a population-weighted mean of category rank: 1=Very Low, 2=Low, 3=Moderate, 4=High, 5=Very High',
+    sites_reporting: latest?.sites_reporting ?? 0,
+    population_covered: latest?.population_covered ?? 0,
+    category_breakdown: latest?.category_breakdown ?? [],
+    trend,
+    history: summaries.map((s) => ({
+      week_end: s.week_end,
+      level: s.national_level,
+      weighted_avg_score: s.weighted_avg_score,
+      sites_reporting: s.sites_reporting,
+    })),
+    source: 'CDC National Wastewater Surveillance System (NWSS), data.cdc.gov dataset atcp-73re, updated weekly (Fridays)',
   };
 }
 

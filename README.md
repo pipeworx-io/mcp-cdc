@@ -2,7 +2,7 @@
 
 The CDC's data products: disease surveillance (notifiable conditions, FluView), vital statistics (births, deaths), behavioral risk factors (BRFSS), environmental health, social determinants of health. The authoritative US public-health data. Free, no auth (some datasets require a free token for higher volume).
 
-Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1679+ live data sources.
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1681+ live data sources.
 
 ## Why this matters for AI agents
 
@@ -14,6 +14,7 @@ Common flows:
 - **Mortality stats.** Death counts by cause, demographic, geography. NVSS data going back decades.
 - **BRFSS.** Behavioral Risk Factor Surveillance System — state-level prevalence of smoking, obesity, diabetes, mental health, etc.
 - **Flu / respiratory virus surveillance.** Weekly FluView, plus COVID-era respiratory illness reporting.
+- **Wastewater surveillance (NWSS).** Weekly national or state SARS-CoV-2/flu/RSV viral activity level from sewershed sampling — the leading indicator ahead of case/hospitalization data, and the only way to answer "what's the current trend in wastewater levels?" `wastewater_national_trend` / `wastewater_state_trend` do this directly; don't route this question to `search_datasets`, whose full-text search on "wastewater"/"nwss" returns unrelated pollen/filovirus datasets instead.
 
 ## Auth
 
@@ -31,6 +32,25 @@ Most CDC datasets are open via Socrata's data.cdc.gov platform; free, lightly ra
 | **NHANES** | Continuous | Examination + lab data, smaller representative sample |
 
 For "what's the rate of X in state Y?" most answers come from NVSS (mortality) or BRFSS (risk factors).
+
+### NWSS wastewater viral activity level
+
+`wastewater_national_trend` and `wastewater_state_trend` read `atcp-73re` ("CDC
+Wastewater Viral Activity Level for SARS-CoV-2, Influenza A and RSV"), published
+weekly on Fridays from ~800+ sewershed sites. It's site-level (one row per site per
+pathogen per week, each with a 5-level category — Very Low/Low/Moderate/High/Very
+High), so there is no ready-made national or state figure: both tools compute a
+population-weighted mean of the category rank (1..5) across every reporting site
+for the grain requested, plus a week-over-week trend (`rising`/`declining`/`stable`,
+±0.15 threshold on the weighted score). `pathogen` accepts loose aliases (`covid`,
+`flu`, `rsv`); `state` accepts postal abbreviations (`CA`) as well as full names.
+
+CDC previously published two "NWSS Public ..." datasets (`g653-rqe2`,
+`2ew6-ywp6`) with a national percentile metric; both stopped updating in Aug
+2026 and are now dead ends — CDC replaced them with the per-pathogen raw
+qPCR datasets (`j9g8-acpt` SARS-CoV-2, `ymmh-divb` Influenza A, `45cq-cw4i`
+RSV) and the classified `atcp-73re` these tools use. Verify before assuming
+otherwise: `curl 'https://data.cdc.gov/resource/atcp-73re.json?$select=max(week_end)'`.
 
 ## Common pitfalls
 
@@ -85,7 +105,7 @@ directly, instead of just this one's:
 }
 ```
 
-Both URLs reach the same gateway and the same 1679+ data sources. The
+Both URLs reach the same gateway and the same 1681+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
 
