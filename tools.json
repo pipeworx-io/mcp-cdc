@@ -1,6 +1,6 @@
 [
   {
-    "name": "search_datasets",
+    "name": "cdc_search_datasets",
     "description": "Search CDC public health datasets by keyword. Returns dataset names, descriptions, IDs, and update dates. Example: search_datasets(\"influenza surveillance\").",
     "inputSchema": {
       "type": "object",
@@ -16,7 +16,7 @@
     }
   },
   {
-    "name": "get_dataset",
+    "name": "cdc_get_dataset",
     "description": "Fetch up to 1000 rows from a CDC Socrata dataset by its four-by-four dataset ID (e.g., \"9mfq-cb36\"). Returns row array with all columns plus column names extracted from the first row. Use search_datasets first to find the dataset ID.",
     "inputSchema": {
       "type": "object",
